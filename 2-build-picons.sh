@@ -4,6 +4,9 @@
 ## Setup locations ##
 #####################
 location=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+
+source $location/resources/shims/macos.sh -quiet
+
 temp=$(mktemp -d --suffix=.picons)
 logfile=$(mktemp --suffix=.picons.log)
 
@@ -158,7 +161,7 @@ $location/resources/tools/create-symlinks.sh $location $temp $style
 ## Start the actual conversion to picons and creation of packages ##
 ####################################################################
 logocollection=$(grep -v -e '^#' -e '^$' $temp/create-symlinks.sh | sed -e 's/^.*logos\///g' -e 's/.png.*$//g' | sort -u )
-logocount=$(echo "$logocollection" | wc -l)
+logocount=$(echo "$logocollection" | wc -l | xargs)
 mkdir -p $temp/cache
 
 if [[ -f $location/build-input/backgrounds.conf ]]; then
@@ -213,10 +216,18 @@ grep -v -e '^#' -e '^$' $backgroundsconf | while read lines ; do
 
         convert $location/build-source/backgrounds/$resolution/$background.png \( $logo -background none -bordercolor none -border 100 -trim -border 1% -resize $resize -gravity center -extent $resolution +repage \) -layers merge - 2>> $logfile | $pngquant - 2>> $logfile > $temp/package/picon/logos/$logoname.png
     done
+    
+imageOptimPath=/Applications/ImageOptim.app/Contents/MacOS/ImageOptim
+if [ -f $imageOptimPath ]; then
+    echo -e "\n$(date +'%H:%M:%S') - INFO: Optimising..."
+    $imageOptimPath $temp/package/picon/logos/*.png &> /dev/null
+fi
 
     echo "$(date +'%H:%M:%S') - EXECUTING: Creating binary packages: $packagenamenoversion"
     $temp/create-symlinks.sh
-    find $temp/package -exec touch --no-dereference -t $timestamp {} \;
+    #find $temp/package -exec touch --no-dereference -t $timestamp {} \;
+    # https://stackoverflow.com/a/26349346
+    find $temp/package | while IFS= read -r -d '' file; do touch --no-dereference -t $timestamp "$file"; done
 
     if [[ $skipipk = "false" ]]; then
         mkdir $temp/package/CONTROL ; cat > $temp/package/CONTROL/control <<-EOF
@@ -233,7 +244,11 @@ grep -v -e '^#' -e '^$' $backgroundsconf | while read lines ; do
 			Priority: optional
 		EOF
         touch --no-dereference -t $timestamp $temp/package/CONTROL/control
-        $location/resources/tools/ipkg-build.sh -o root -g root $temp/package $binaries >> $logfile
+        if [[ $OSTYPE = "darwin"* ]]; then
+            $location/resources/tools/ipkg-build.sh -c $temp/package $binaries >> $logfile
+        else
+            $location/resources/tools/ipkg-build.sh -o root -g root $temp/package $binaries >> $logfile
+        fi
     fi
 
     mv $temp/package/picon $temp/package/$packagename
@@ -241,7 +256,9 @@ grep -v -e '^#' -e '^$' $backgroundsconf | while read lines ; do
     tar --dereference --owner=root --group=root -cf - --exclude=logos --directory=$temp/package $packagename | $compressor 2>> $logfile > $binaries/$packagename.hardlink.tar.$ext
     tar --owner=root --group=root -cf - --directory=$temp/package $packagename | $compressor 2>> $logfile > $binaries/$packagename.symlink.tar.$ext
 
-    find $binaries -exec touch -t $timestamp {} \;
+    #find $binaries -exec touch -t $timestamp {} \;
+    # https://stackoverflow.com/a/26349346
+    find $binaries | while IFS= read -r -d '' file; do touch -t $timestamp "$file"; done
     rm -rf $temp/package
 done
 
